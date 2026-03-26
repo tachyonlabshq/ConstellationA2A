@@ -97,17 +97,15 @@ register_agent() {
     local mac
     mac=$(generate_hmac "$nonce" "$username" "$password" "$admin")
 
-    # Step 3: Register the account
+    # Step 3: Register the account (use --data-binary @- to avoid leaking
+    # the password in the process table via command-line arguments)
+    local reg_payload
+    reg_payload=$(printf '{"nonce":"%s","username":"%s","password":"%s","mac":"%s","admin":%s}' \
+        "$nonce" "$username" "$password" "$mac" "$admin")
     local reg_response
-    reg_response=$(curl -sf -X POST "$SERVER_URL/_synapse/admin/v1/register" \
+    reg_response=$(printf '%s' "$reg_payload" | curl -sf -X POST "$SERVER_URL/_synapse/admin/v1/register" \
         -H "Content-Type: application/json" \
-        -d "{
-            \"nonce\": \"$nonce\",
-            \"username\": \"$username\",
-            \"password\": \"$password\",
-            \"mac\": \"$mac\",
-            \"admin\": $admin
-        }" 2>/dev/null || true)
+        --data-binary @- 2>/dev/null || true)
 
     if [ -z "$reg_response" ]; then
         log_error "Registration request failed for $username"
@@ -162,17 +160,13 @@ login_agent() {
 
     log_info "Logging in as @${username}:${SERVER_NAME}..."
 
+    local login_payload
+    login_payload=$(printf '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"%s"},"password":"%s"}' \
+        "$username" "$password")
     local login_response
-    login_response=$(curl -sf -X POST "$SERVER_URL/_matrix/client/v3/login" \
+    login_response=$(printf '%s' "$login_payload" | curl -sf -X POST "$SERVER_URL/_matrix/client/v3/login" \
         -H "Content-Type: application/json" \
-        -d "{
-            \"type\": \"m.login.password\",
-            \"identifier\": {
-                \"type\": \"m.id.user\",
-                \"user\": \"$username\"
-            },
-            \"password\": \"$password\"
-        }" 2>/dev/null || true)
+        --data-binary @- 2>/dev/null || true)
 
     if [ -z "$login_response" ]; then
         log_error "Login failed for $username"

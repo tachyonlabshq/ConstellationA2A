@@ -13,6 +13,9 @@ services:
     build:
       context: ./conduit
       dockerfile: Dockerfile
+    # Override: remove host port binding. Agents access Conduit via the
+    # internal Docker network only. No port is exposed to the host.
+    ports: !override []
     volumes:
       - ./conduit/conduit-hardened.toml:/etc/conduit/conduit.toml:ro
       - conduit_data:/var/lib/conduit

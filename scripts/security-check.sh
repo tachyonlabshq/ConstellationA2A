@@ -119,7 +119,7 @@ check_env_file() {
 
         # Check for common default/placeholder passwords
         case "$value" in
-            password|changeme|secret|admin|default|test|""|CHANGE_ME*|change-me*|TODO*|xxx*|placeholder*)
+            password|changeme|secret|admin|default|test|""|CHANGE_ME*|change-me*|TODO*|xxx*|placeholder*|GENERATE_*|*-secret)
                 local key
                 key=$(echo "$line" | cut -d'=' -f1)
                 result_fail ".env contains default/placeholder value for $key"

@@ -10,7 +10,7 @@ services:
       - CONDUIT_DATABASE_BACKEND=rocksdb
       - CONDUIT_PORT=6167
       - CONDUIT_ALLOW_REGISTRATION=true
-      - CONDUIT_REGISTRATION_SHARED_SECRET=${REGISTRATION_SECRET:-change-me-in-production}
+      - CONDUIT_REGISTRATION_SHARED_SECRET=${REGISTRATION_SECRET:?REGISTRATION_SECRET must be set - see .env.example}
     networks:
       - constellation
     healthcheck:
@@ -30,7 +30,7 @@ services:
     environment:
       - MATRIX_HOMESERVER=http://conduit:6167
       - AGENT_USERNAME=coordinator
-      - AGENT_PASSWORD=${COORDINATOR_PASSWORD:-coordinator-secret}
+      - AGENT_PASSWORD=${COORDINATOR_PASSWORD:?COORDINATOR_PASSWORD must be set}
       - AGENT_DISPLAY_NAME=Coordinator Agent
       - AUTO_JOIN_ROOMS=#constellation:constellation.local
     volumes:
@@ -49,7 +49,7 @@ services:
     environment:
       - MATRIX_HOMESERVER=http://conduit:6167
       - AGENT_USERNAME=researcher
-      - AGENT_PASSWORD=${RESEARCHER_PASSWORD:-researcher-secret}
+      - AGENT_PASSWORD=${RESEARCHER_PASSWORD:?RESEARCHER_PASSWORD must be set}
       - AGENT_DISPLAY_NAME=Research Agent
       - AUTO_JOIN_ROOMS=#constellation:constellation.local
     volumes:
@@ -68,7 +68,7 @@ services:
     environment:
       - MATRIX_HOMESERVER=http://conduit:6167
       - AGENT_USERNAME=coder
-      - AGENT_PASSWORD=${CODER_PASSWORD:-coder-secret}
+      - AGENT_PASSWORD=${CODER_PASSWORD:?CODER_PASSWORD must be set}
       - AGENT_DISPLAY_NAME=Coder Agent
       - AUTO_JOIN_ROOMS=#constellation:constellation.local
     volumes:

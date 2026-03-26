@@ -21,7 +21,7 @@ import urllib.parse
 
 DEFAULT_HOMESERVER = os.environ.get("MATRIX_HOMESERVER", "http://localhost:8448")
 DEFAULT_USERNAME = os.environ.get("AGENT_USERNAME", "admin")
-DEFAULT_PASSWORD = os.environ.get("AGENT_PASSWORD", "admin-secret")
+DEFAULT_PASSWORD = os.environ.get("AGENT_PASSWORD", "")
 
 
 def api_request(homeserver, method, endpoint, data=None, token=None):
@@ -208,7 +208,11 @@ def cmd_register_agent(args):
 
     if "user_id" in result:
         print(f"Registered: {result['user_id']}")
-        print(f"Password: {password}")
+        if args.agent_password:
+            print("Password: (as provided)")
+        else:
+            print(f"Password: {password}")
+            print("IMPORTANT: Save this password now. It cannot be retrieved later.")
         return 0
     else:
         print(f"Registration failed: {result.get('error', result)}")

@@ -27,7 +27,7 @@ use crate::error::{ConstellationError, Result};
 ///     .build()
 ///     .unwrap();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentConfig {
     /// URL of the Matrix homeserver to connect to.
     pub homeserver_url: String,
@@ -41,6 +41,19 @@ pub struct AgentConfig {
     pub auto_join_rooms: Vec<String>,
     /// Optional device ID for session persistence across restarts.
     pub device_id: Option<String>,
+}
+
+impl std::fmt::Debug for AgentConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentConfig")
+            .field("homeserver_url", &self.homeserver_url)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("display_name", &self.display_name)
+            .field("auto_join_rooms", &self.auto_join_rooms)
+            .field("device_id", &self.device_id)
+            .finish()
+    }
 }
 
 impl Default for AgentConfig {

@@ -106,8 +106,11 @@ class BaseAgent:
     @staticmethod
     def format_mention(username: str, server_name: str) -> str:
         """Format an @-mention for a user."""
+        import html
         user_id = f"@{username}:{server_name}"
-        return f'<a href="https://matrix.to/#/{user_id}">@{username}</a>'
+        escaped_id = html.escape(user_id, quote=True)
+        escaped_name = html.escape(f"@{username}")
+        return f'<a href="https://matrix.to/#/{escaped_id}">{escaped_name}</a>'
 
     @staticmethod
     def format_section(title: str, items: list[str]) -> str:

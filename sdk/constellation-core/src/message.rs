@@ -345,8 +345,9 @@ pub fn parse_mentions(body: &str) -> Vec<String> {
 pub fn format_mention(user_id: &str, display_name: &str) -> (String, String) {
     let plain = display_name.to_string();
     let escaped_name = html_escape(display_name);
+    let escaped_id = html_escape(user_id);
     let html = format!(
-        "<a href=\"https://matrix.to/#/{user_id}\">{escaped_name}</a>"
+        "<a href=\"https://matrix.to/#/{escaped_id}\">{escaped_name}</a>"
     );
     (plain, html)
 }
@@ -363,8 +364,9 @@ pub fn format_mention_message(
     let plain = format!("{display_name} {message}");
     let escaped_name = html_escape(display_name);
     let escaped_msg = html_escape(message);
+    let escaped_id = html_escape(user_id);
     let html = format!(
-        "<a href=\"https://matrix.to/#/{user_id}\">{escaped_name}</a> {escaped_msg}"
+        "<a href=\"https://matrix.to/#/{escaped_id}\">{escaped_name}</a> {escaped_msg}"
     );
     (plain, html)
 }
