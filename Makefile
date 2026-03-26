@@ -1,4 +1,4 @@
-.PHONY: setup up down logs build register test clean sdk-build sdk-test sdk-python health status shell-conduit help
+.PHONY: setup up down logs build register test clean sdk-build sdk-test sdk-python health status shell-conduit lint ci docker-test help
 
 COMPOSE := docker compose
 
@@ -48,3 +48,16 @@ status: ## Show running containers and their status
 
 shell-conduit: ## Open a shell in the Conduit container
 	$(COMPOSE) exec conduit /bin/sh
+
+lint: ## Run all linters (Rust + Python)
+	cd sdk && cargo fmt --all -- --check
+	cd sdk && cargo clippy --all-targets --all-features -- -D warnings
+	@command -v ruff >/dev/null 2>&1 && ruff check agents/ cli/ examples/ || echo "ruff not installed, skipping"
+	@command -v black >/dev/null 2>&1 && black --check agents/ cli/ examples/ || echo "black not installed, skipping"
+
+ci: lint test ## Run lint and tests (CI pipeline)
+
+docker-test: ## Build and validate Docker Compose configuration
+	$(COMPOSE) config --quiet
+	$(COMPOSE) build
+	@echo "Docker build validated successfully."
