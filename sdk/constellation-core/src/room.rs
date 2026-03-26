@@ -1,3 +1,8 @@
+//! Room management for Constellation agents.
+//!
+//! Provides [`RoomHandle`], a high-level wrapper around a Matrix room that
+//! simplifies sending messages, @-mentions, and querying room state.
+
 use matrix_sdk::Room;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use tracing::{debug, info};
@@ -6,6 +11,9 @@ use crate::error::{ConstellationError, Result};
 use crate::message::{format_mention_message, ConstellationMetadata, Message};
 
 /// A handle to a joined Matrix room, providing high-level messaging operations.
+///
+/// Obtained via [`ConstellationAgent::join_room`](crate::ConstellationAgent::join_room)
+/// or [`ConstellationAgent::create_room`](crate::ConstellationAgent::create_room).
 #[derive(Debug, Clone)]
 pub struct RoomHandle {
     inner: Room,
@@ -16,12 +24,12 @@ impl RoomHandle {
         Self { inner: room }
     }
 
-    /// The room ID as a string.
+    /// The Matrix room ID as a string (e.g. `!abc123:constellation.local`).
     pub fn room_id(&self) -> String {
         self.inner.room_id().to_string()
     }
 
-    /// Get the display name of the room, if set.
+    /// Get the display name of the room, if one is set.
     pub async fn display_name(&self) -> Result<Option<String>> {
         let name = self
             .inner
@@ -31,7 +39,7 @@ impl RoomHandle {
         Ok(Some(name.to_string()))
     }
 
-    /// Get the list of joined member user IDs.
+    /// Get the list of Matrix user IDs for all joined members.
     pub async fn get_members(&self) -> Result<Vec<String>> {
         let members = self
             .inner
@@ -41,7 +49,10 @@ impl RoomHandle {
         Ok(members.iter().map(|m| m.user_id().to_string()).collect())
     }
 
-    /// Send a plain text message to this room.
+    /// Send a message to this room.
+    ///
+    /// If the message contains [`ConstellationMetadata`], it will be embedded
+    /// as the `ai.constellation.metadata` field in the event content.
     pub async fn send_message(&self, msg: &Message) -> Result<()> {
         let content = if let Some(ref meta) = msg.metadata {
             self.build_content_with_metadata(&msg.body, None, meta)?
@@ -57,7 +68,10 @@ impl RoomHandle {
         Ok(())
     }
 
-    /// Send a message that @-mentions a specific user.
+    /// Send a message that @-mentions a specific user in this room.
+    ///
+    /// The mention is formatted as an HTML link so Matrix clients display it
+    /// as a proper mention, and the target agent's mention handler will fire.
     pub async fn send_mention(
         &self,
         user_id: &str,
@@ -80,7 +94,8 @@ impl RoomHandle {
         Ok(())
     }
 
-    /// Build a `RoomMessageEventContent` with constellation metadata injected.
+    /// Build a `RoomMessageEventContent` with constellation metadata injected
+    /// as a custom field in the event JSON.
     fn build_content_with_metadata(
         &self,
         plain: &str,
@@ -104,7 +119,7 @@ impl RoomHandle {
         Ok(content)
     }
 
-    /// Access the underlying matrix-sdk Room.
+    /// Access the underlying [`matrix_sdk::Room`].
     pub fn inner(&self) -> &Room {
         &self.inner
     }

@@ -35,6 +35,7 @@ services:
       - AUTO_JOIN_ROOMS=#constellation:constellation.local
     volumes:
       - ./agents/coordinator/agent.py:/app/agent.py:ro
+      - ./agents/common.py:/app/common.py:ro
     networks:
       - constellation
 
@@ -53,6 +54,7 @@ services:
       - AUTO_JOIN_ROOMS=#constellation:constellation.local
     volumes:
       - ./agents/researcher/agent.py:/app/agent.py:ro
+      - ./agents/common.py:/app/common.py:ro
     networks:
       - constellation
 
@@ -71,6 +73,7 @@ services:
       - AUTO_JOIN_ROOMS=#constellation:constellation.local
     volumes:
       - ./agents/coder/agent.py:/app/agent.py:ro
+      - ./agents/common.py:/app/common.py:ro
     networks:
       - constellation
 

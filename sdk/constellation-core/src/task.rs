@@ -1,3 +1,9 @@
+//! In-memory task tracking for Constellation agents.
+//!
+//! The [`TaskManager`] provides lifecycle management for tasks created by or
+//! assigned to an agent. Tasks are stored in memory and can be queried by
+//! status, updated, completed, or removed.
+
 use std::collections::HashMap;
 
 use tracing::{debug, info, warn};
@@ -8,28 +14,38 @@ use crate::message::{TaskResult, TaskStatus};
 /// In-memory record for a tracked task.
 #[derive(Debug, Clone)]
 pub struct TaskRecord {
+    /// The unique task identifier.
     pub task_id: String,
+    /// The type/category of the task.
     pub task_type: String,
+    /// Current status of the task.
     pub status: TaskStatus,
+    /// The task payload data.
     pub payload: serde_json::Value,
+    /// The result data, populated when the task completes.
     pub result: Option<serde_json::Value>,
+    /// The room ID where this task was created.
     pub room_id: String,
 }
 
 /// Manages the lifecycle of tasks created by or assigned to this agent.
+///
+/// All state is held in memory. For persistence across restarts, tasks
+/// should be re-created from the Matrix event history.
 #[derive(Debug, Default)]
 pub struct TaskManager {
     tasks: HashMap<String, TaskRecord>,
 }
 
 impl TaskManager {
+    /// Create a new empty task manager.
     pub fn new() -> Self {
         Self {
             tasks: HashMap::new(),
         }
     }
 
-    /// Register a new task. Returns the task ID.
+    /// Register a new task and begin tracking it. Returns the task ID.
     pub fn create(
         &mut self,
         task_id: impl Into<String>,
@@ -52,6 +68,10 @@ impl TaskManager {
     }
 
     /// Update the status of an existing task.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConstellationError::Task`] if the task ID is not found.
     pub fn update_status(&mut self, task_id: &str, status: TaskStatus) -> Result<()> {
         let record = self
             .tasks
@@ -62,7 +82,11 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Mark a task as completed with a result.
+    /// Mark a task as completed (or failed) with a result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConstellationError::Task`] if the task ID is not found.
     pub fn complete(&mut self, task_id: &str, result: TaskResult) -> Result<()> {
         let record = self
             .tasks
@@ -74,17 +98,17 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Get the current status of a task.
+    /// Get the current status of a task, or `None` if not tracked.
     pub fn get_status(&self, task_id: &str) -> Option<TaskStatus> {
         self.tasks.get(task_id).map(|r| r.status)
     }
 
-    /// Get the full record for a task.
+    /// Get the full record for a task, or `None` if not tracked.
     pub fn get(&self, task_id: &str) -> Option<&TaskRecord> {
         self.tasks.get(task_id)
     }
 
-    /// List all tasks with a given status.
+    /// List all tasks with the given status.
     pub fn list_by_status(&self, status: TaskStatus) -> Vec<&TaskRecord> {
         self.tasks.values().filter(|r| r.status == status).collect()
     }
@@ -94,7 +118,7 @@ impl TaskManager {
         self.list_by_status(TaskStatus::Pending)
     }
 
-    /// Remove a completed or failed task from tracking.
+    /// Remove a task from tracking. Returns the record if it existed.
     pub fn remove(&mut self, task_id: &str) -> Option<TaskRecord> {
         let removed = self.tasks.remove(task_id);
         if removed.is_some() {
@@ -110,6 +134,7 @@ impl TaskManager {
         self.tasks.len()
     }
 
+    /// Returns `true` if no tasks are being tracked.
     pub fn is_empty(&self) -> bool {
         self.tasks.is_empty()
     }
@@ -135,5 +160,26 @@ mod tests {
         let result = TaskResult::success(&id, json!({"answer": 42}));
         mgr.complete(&id, result).unwrap();
         assert_eq!(mgr.get_status(&id), Some(TaskStatus::Completed));
+    }
+
+    #[test]
+    fn test_task_not_found() {
+        let mut mgr = TaskManager::new();
+        assert!(mgr.update_status("nonexistent", TaskStatus::InProgress).is_err());
+        assert!(mgr.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_task_remove() {
+        let mut mgr = TaskManager::new();
+        mgr.create("t1", "test", json!(null), "!room:test");
+        assert_eq!(mgr.len(), 1);
+
+        let removed = mgr.remove("t1");
+        assert!(removed.is_some());
+        assert!(mgr.is_empty());
+
+        // Removing again returns None.
+        assert!(mgr.remove("t1").is_none());
     }
 }

@@ -1,114 +1,365 @@
-"""Coordinator Agent - Routes tasks to specialist agents."""
+"""Coordinator Agent - Smart task router with multi-step pipeline support."""
 
-import asyncio
-import logging
-import os
-import signal
+import time
 import sys
+import os
 
-from constellation import ConstellationAgent, AgentConfig, Message
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
-log = logging.getLogger("coordinator")
+from constellation import Message
+from common import BaseAgent, TaskInfo, generate_task_id
 
-AVAILABLE_AGENTS = {
-    "researcher": "Research Agent - web research, data analysis, information gathering",
-    "coder": "Coder Agent - code generation, debugging, code review",
+
+AGENT_REGISTRY = {
+    "researcher": {
+        "description": "Research, analysis, information gathering, summarization",
+        "keywords": [
+            "research", "find", "look up", "search", "analyze", "analysis",
+            "summarize", "explain", "what is", "how does", "compare", "review",
+            "investigate", "explore", "study", "gather", "information",
+        ],
+        "status": "unknown",
+        "last_seen": None,
+    },
+    "coder": {
+        "description": "Code generation, debugging, refactoring, implementation",
+        "keywords": [
+            "code", "implement", "function", "bug", "fix", "program", "script",
+            "class", "refactor", "write", "create", "build", "generate", "debug",
+            "test", "python", "rust", "javascript", "typescript", "api",
+        ],
+        "status": "unknown",
+        "last_seen": None,
+    },
 }
 
-HELP_TEXT = (
-    "I'm the Coordinator Agent. I route tasks to specialist agents.\n\n"
-    "Available agents:\n"
-    + "\n".join(f"  - @{name}: {desc}" for name, desc in AVAILABLE_AGENTS.items())
-    + "\n\nSend me a task and I'll delegate it to the right agent."
-)
+# Keywords that signal a multi-step task
+CHAIN_KEYWORDS = {
+    "then": True,
+    "and then": True,
+    "after that": True,
+    "followed by": True,
+    "next": True,
+}
 
 
-def classify_task(body: str) -> str:
-    """Simple keyword-based task classification."""
-    body_lower = body.lower()
-    code_keywords = ["code", "implement", "function", "bug", "fix", "program", "script", "class", "refactor"]
-    if any(kw in body_lower for kw in code_keywords):
-        return "coder"
-    return "researcher"
+class CoordinatorAgent(BaseAgent):
+    def __init__(self):
+        super().__init__("coordinator", "Coordinator Agent")
+        self.active_tasks: dict[str, TaskInfo] = {}
+        self.completed_tasks: list[TaskInfo] = []
 
+    def register_handlers(self):
+        @self.agent.on_mention
+        async def handle_mention(event):
+            body = event.body.strip()
+            sender = event.sender
+            self.log.info("Received mention from %s: %s", sender, body)
 
-async def main():
-    config = AgentConfig(
-        homeserver=os.environ["MATRIX_HOMESERVER"],
-        username=os.environ["AGENT_USERNAME"],
-        password=os.environ["AGENT_PASSWORD"],
-        display_name=os.environ.get("AGENT_DISPLAY_NAME", "Coordinator Agent"),
-    )
+            # Strip own @-mention from body if present
+            clean_body = body
+            for prefix in (f"@{self.config.username}", f"@coordinator"):
+                if clean_body.lower().startswith(prefix.lower()):
+                    clean_body = clean_body[len(prefix):].strip()
+                    break
 
-    agent = ConstellationAgent(config)
-    shutdown_event = asyncio.Event()
+            cmd = clean_body.lower()
 
-    def handle_signal():
-        log.info("Shutdown signal received, stopping gracefully...")
-        shutdown_event.set()
+            if cmd in ("help", "?", "help me"):
+                await self._send_help()
+                return
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, handle_signal)
+            if cmd in ("status", "status?"):
+                await self._send_status()
+                return
 
-    await agent.connect()
-    log.info("Coordinator agent connected to Matrix.")
+            if cmd.startswith("ping "):
+                agent_name = cmd[5:].strip()
+                await self._ping_agent(agent_name)
+                return
 
-    rooms_env = os.environ.get("AUTO_JOIN_ROOMS", "")
-    room = None
-    for room_alias in rooms_env.split(","):
-        room_alias = room_alias.strip()
-        if room_alias:
-            room = await agent.join_room(room_alias)
-            log.info("Joined room: %s", room_alias)
+            # Check for multi-step task
+            chain = self._parse_chain(clean_body)
+            if chain and len(chain) > 1:
+                await self._handle_chain(chain, sender)
+            else:
+                await self._handle_single_task(clean_body, sender)
 
-    active_tasks: dict[str, str] = {}  # task_id -> delegated_agent
+        @self.agent.on_message
+        async def handle_message(event):
+            if event.sender == f"@{self.config.username}:{self.server_name}":
+                return
 
-    @agent.on_mention
-    async def handle_mention(event):
-        body = event.body.strip()
-        log.info("Received mention from %s: %s", event.sender, body)
+            sender_name = event.sender.split(":")[0].lstrip("@")
 
-        if body.lower() in ("help", "?", "help me"):
-            await agent.send_message(room, Message(body=HELP_TEXT))
+            # Track agent activity
+            if sender_name in AGENT_REGISTRY:
+                AGENT_REGISTRY[sender_name]["status"] = "online"
+                AGENT_REGISTRY[sender_name]["last_seen"] = time.time()
+
+            # Check if this is a task completion
+            metadata = getattr(event, "metadata", None) or {}
+            if isinstance(metadata, dict):
+                reply_task = metadata.get("task_id") or getattr(event, "reply_to_task", None)
+            else:
+                reply_task = getattr(event, "reply_to_task", None)
+
+            if reply_task and reply_task in self.active_tasks:
+                task = self.active_tasks[reply_task]
+                task.status = "completed"
+                self.log.info("Task %s completed by %s", reply_task, sender_name)
+
+                # Handle chain: dispatch next step
+                if task.chain_next and task.chain_agent:
+                    next_task_id = generate_task_id()
+                    next_description = task.chain_next
+                    next_agent = task.chain_agent
+
+                    self.log.info(
+                        "Chain continues: %s -> %s (task %s)",
+                        next_agent, next_description, next_task_id,
+                    )
+
+                    next_task = TaskInfo(
+                        task_id=next_task_id,
+                        description=next_description,
+                        assigned_to=next_agent,
+                        requested_by=task.requested_by,
+                    )
+                    self.active_tasks[next_task_id] = next_task
+
+                    context = event.body if hasattr(event, "body") else ""
+                    delegation_body = (
+                        f"@{next_agent} [Task {next_task_id}] {next_description}\n\n"
+                        f"Context from previous step:\n{context}"
+                    )
+
+                    await self.agent.mention_agent(
+                        self.room, next_agent,
+                        Message(body=delegation_body),
+                    )
+
+                # Move to completed
+                del self.active_tasks[reply_task]
+                self.completed_tasks.append(task)
+                if len(self.completed_tasks) > 50:
+                    self.completed_tasks = self.completed_tasks[-50:]
+
+    def _classify_task(self, body: str) -> str:
+        """Route a task to the best agent based on keyword scoring."""
+        body_lower = body.lower()
+        scores: dict[str, int] = {}
+
+        for agent_name, info in AGENT_REGISTRY.items():
+            score = sum(1 for kw in info["keywords"] if kw in body_lower)
+            scores[agent_name] = score
+
+        best = max(scores, key=scores.get)
+        if scores[best] == 0:
+            return "researcher"  # default fallback
+        return best
+
+    def _parse_chain(self, body: str) -> list[tuple[str, str]] | None:
+        """Parse multi-step tasks like 'research X then code Y'.
+
+        Returns list of (agent, description) tuples, or None if not a chain.
+        """
+        body_lower = body.lower()
+
+        # Find the best splitting keyword
+        split_keyword = None
+        split_pos = -1
+        for kw in CHAIN_KEYWORDS:
+            pos = body_lower.find(f" {kw} ")
+            if pos != -1 and (split_pos == -1 or pos < split_pos):
+                split_keyword = kw
+                split_pos = pos
+
+        if split_keyword is None:
+            return None
+
+        part1 = body[:split_pos].strip()
+        part2 = body[split_pos + len(split_keyword) + 2:].strip()
+
+        if not part1 or not part2:
+            return None
+
+        agent1 = self._classify_task(part1)
+        agent2 = self._classify_task(part2)
+
+        return [(agent1, part1), (agent2, part2)]
+
+    async def _handle_single_task(self, body: str, sender: str):
+        """Classify and delegate a single task."""
+        target_agent = self._classify_task(body)
+        task_id = generate_task_id()
+
+        task = TaskInfo(
+            task_id=task_id,
+            description=body,
+            assigned_to=target_agent,
+            requested_by=sender,
+        )
+        self.active_tasks[task_id] = task
+
+        self.log.info("Delegating task %s to %s: %s", task_id, target_agent, body)
+
+        delegation_body = f"@{target_agent} [Task {task_id}] {body}"
+        await self.agent.mention_agent(
+            self.room, target_agent,
+            Message(body=delegation_body),
+        )
+
+        ack = f"Got it. Delegated to **@{target_agent}** (task {task_id})."
+        await self.agent.send_message(self.room, Message(body=ack))
+
+    async def _handle_chain(self, chain: list[tuple[str, str]], sender: str):
+        """Handle a multi-step task chain."""
+        # Build chain from last to first so we can link them
+        task_ids = []
+        for i, (agent, desc) in enumerate(chain):
+            task_ids.append(generate_task_id())
+
+        # Create task infos with chain links
+        for i, (agent, desc) in enumerate(chain):
+            task = TaskInfo(
+                task_id=task_ids[i],
+                description=desc,
+                assigned_to=agent,
+                requested_by=sender,
+            )
+            if i < len(chain) - 1:
+                task.chain_next = chain[i + 1][1]
+                task.chain_agent = chain[i + 1][0]
+            task_ids[i] = task.task_id
+            self.active_tasks[task.task_id] = task
+
+        # Start the first step
+        first_agent, first_desc = chain[0]
+        first_task = list(self.active_tasks.values())[-len(chain)]
+
+        self.log.info(
+            "Starting %d-step chain. Step 1: %s -> %s",
+            len(chain), first_agent, first_desc,
+        )
+
+        steps_desc = " -> ".join(
+            f"**@{agent}**: {desc}" for agent, desc in chain
+        )
+
+        ack = (
+            f"Multi-step task detected ({len(chain)} steps):\n"
+            f"{steps_desc}\n\n"
+            f"Starting with step 1..."
+        )
+        await self.agent.send_message(self.room, Message(body=ack))
+
+        delegation_body = f"@{first_agent} [Task {first_task.task_id}] {first_desc}"
+        await self.agent.mention_agent(
+            self.room, first_agent,
+            Message(body=delegation_body),
+        )
+
+    async def _send_help(self):
+        """Send the help message listing available agents and commands."""
+        lines = [
+            "**Coordinator Agent** - I route tasks to specialist agents.",
+            "",
+            "**Commands:**",
+            "  - `help` - Show this help message",
+            "  - `status` - Show agent status and active tasks",
+            "  - `ping <agent>` - Check if an agent is responsive",
+            "",
+            "**Available Agents:**",
+        ]
+
+        for name, info in AGENT_REGISTRY.items():
+            status = info["status"]
+            lines.append(f"  - **@{name}** ({status}): {info['description']}")
+
+        lines.extend([
+            "",
+            "**Usage:**",
+            "  - Send me a task and I'll route it to the best agent.",
+            "  - For multi-step tasks, use 'then': *research X then code Y*",
+        ])
+
+        await self.agent.send_message(self.room, Message(body="\n".join(lines)))
+
+    async def _send_status(self):
+        """Send status report of agents and tasks."""
+        lines = ["**System Status**", ""]
+
+        # Agent status
+        lines.append("**Agents:**")
+        for name, info in AGENT_REGISTRY.items():
+            status = info["status"]
+            last_seen = info["last_seen"]
+            if last_seen:
+                ago = int(time.time() - last_seen)
+                if ago < 60:
+                    seen_str = f"{ago}s ago"
+                elif ago < 3600:
+                    seen_str = f"{ago // 60}m ago"
+                else:
+                    seen_str = f"{ago // 3600}h ago"
+                lines.append(f"  - **@{name}**: {status} (last seen {seen_str})")
+            else:
+                lines.append(f"  - **@{name}**: {status}")
+
+        # Active tasks
+        lines.append("")
+        if self.active_tasks:
+            lines.append(f"**Active Tasks ({len(self.active_tasks)}):**")
+            for tid, task in self.active_tasks.items():
+                age = int(time.time() - task.created_at)
+                lines.append(
+                    f"  - `{tid}` -> @{task.assigned_to}: "
+                    f"{task.description[:60]} ({age}s)"
+                )
+                if task.chain_next:
+                    lines.append(f"    Next: @{task.chain_agent} -> {task.chain_next[:40]}")
+        else:
+            lines.append("**Active Tasks:** None")
+
+        # Recent completed
+        if self.completed_tasks:
+            recent = self.completed_tasks[-5:]
+            lines.append("")
+            lines.append(f"**Recently Completed ({len(recent)}/{len(self.completed_tasks)}):**")
+            for task in recent:
+                lines.append(
+                    f"  - `{task.task_id}` @{task.assigned_to}: "
+                    f"{task.description[:60]}"
+                )
+
+        await self.agent.send_message(self.room, Message(body="\n".join(lines)))
+
+    async def _ping_agent(self, agent_name: str):
+        """Ping an agent to check responsiveness."""
+        if agent_name not in AGENT_REGISTRY:
+            await self.agent.send_message(
+                self.room,
+                Message(body=f"Unknown agent: **{agent_name}**. "
+                        f"Available: {', '.join(AGENT_REGISTRY.keys())}"),
+            )
             return
 
-        target_agent = classify_task(body)
-        log.info("Delegating task to %s", target_agent)
-
-        delegation_msg = f"@{target_agent} {body}"
-        await agent.mention_agent(room, target_agent, Message(body=delegation_msg))
-
-        if hasattr(event, "task_id") and event.task_id:
-            active_tasks[event.task_id] = target_agent
-            log.info("Tracking task %s -> %s", event.task_id, target_agent)
-
-    @agent.on_message
-    async def handle_message(event):
-        if event.sender == config.username:
-            return
-
-        sender_name = event.sender.split(":")[0].lstrip("@")
-        if sender_name in AVAILABLE_AGENTS:
-            task_id = getattr(event, "reply_to_task", None)
-            if task_id and task_id in active_tasks:
-                del active_tasks[task_id]
-                log.info("Task %s completed by %s", task_id, sender_name)
-
-    log.info("Coordinator agent running. Waiting for messages...")
-
-    await shutdown_event.wait()
-    await agent.disconnect()
-    log.info("Coordinator agent stopped.")
+        info = AGENT_REGISTRY[agent_name]
+        if info["last_seen"]:
+            ago = int(time.time() - info["last_seen"])
+            await self.agent.send_message(
+                self.room,
+                Message(body=f"@{agent_name} was last seen {ago}s ago. "
+                        f"Status: {info['status']}"),
+            )
+        else:
+            await self.agent.send_message(
+                self.room,
+                Message(body=f"@{agent_name} has not been seen yet. "
+                        f"Status: {info['status']}"),
+            )
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-    sys.exit(0)
+    CoordinatorAgent().run()
